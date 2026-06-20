@@ -1,7 +1,6 @@
 import ipaddr from "https://cdn.jsdelivr.net/npm/ipaddr.js@2/+esm";
 
 /*
-    'fmtp':              {},
     'msid':              {},
     'sendrecv':          {},
     'ssrc':              {},
@@ -11,6 +10,7 @@ const attrParserMap = Object.freeze({
     'candidate':         parseCandidate,
     'end-of-candidates': v => { },
     'fingerprint':       parseFingerprint,
+    'fmtp':              parseFMTP,
     'group':             parseGroup,
     'ice-pwd':           parseIcePassword,
     'ice-ufrag':         parseIceUsername,
@@ -43,18 +43,11 @@ class Candidate {
     rport       = null;
 }
 
-class RTPMap {
-    payloadType  = null;
+class CodecDescription {
     encodingName = null;
     clockRate    = null;
     channels     = null;
-
-    constructor(pt, encname, clock, ch) {
-        this.payloadType  = pt;
-        this.encodingName = encname;
-        this.clockRate    = clock;
-        this.channels     = ch;
-    }
+    parameters   = {};
 }
 
 function parseIPAddressIfValid(addr) {
@@ -100,17 +93,37 @@ function parseCandidate(_key, value, attributes) {
     attributes['candidates'].push(c);
 }
 
+function parseFMTP(_key, value, attributes) {
+    const fmtpRegex = /(?<payload_type>\d+) /;
+    const keyValuePairRegex = /(?<key>[^=;\s]+)=(?<value>[^;]+)/g;
+    let results = value.match(fmtpRegex);
+
+    attributes['codec'] ??= {}
+    attributes['codec'][results.groups.payload_type] ??= new CodecDescription();
+
+    let codec = attributes['codec'][results.groups.payload_type];
+    let matches = value.matchAll(keyValuePairRegex);
+    matches.forEach(([, key, value]) => codec.parameters[key] =  value);
+}
+
 function parseRTPMap(_key, value, attributes) {
     // rtpmap attribute is defined in section 6.6 of rfc-8866.
-    const RTPMapRegex = new RegExp(
-        `(?<payload_type>\\d+) (?<encoding_name>[^\\/]+)\\/(?<clock_rate>\\d+)\\/?(?<channels>\\d+)?`
-    );
-
+    const RTPMapRegex = /(?<payload_type>\d+) (?<encoding_name>[^\/]+)\/(?<clock_rate>\d+)\/?(?<channels>\d+)?/;
     const results = value.match(RTPMapRegex);
-    attributes['rtpmap'] = new RTPMap(results.groups.payload_type,
-                                      results.groups.encoding_name,
-                                      results.groups.clock_rate,
-                                      results.groups.channels);
+
+    attributes['codec'] ??= {}
+    attributes['codec'][results.groups.payload_type] ??= new CodecDescription();
+    let codec = attributes['codec'][results.groups.payload_type];
+
+    // Encoding names are registered by IANA.
+    // https://www.iana.org/assignments/rtp-parameters/rtp-parameters.xhtml
+    // See note under the `RTP Payload Format Media Types` section:
+    //      the "encoding name" is also registered as a media
+    //      subtype under the media type "audio" or "video"
+    // TODO: validate received encoding name against registered names.
+    codec.encodingName = results.groups.encoding_name;
+    codec.clockRate = results.groups.clock_rate;
+    codec.channels = results.groups.channels;
 }
 
 function parseRTCPOption(key, _value, attributes) {
